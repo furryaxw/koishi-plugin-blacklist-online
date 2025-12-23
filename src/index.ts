@@ -1,10 +1,10 @@
 import {Context, Schema, Time} from 'koishi';
-import { randomUUID } from 'node:crypto'; // 【修复】使用原生 crypto
+import {randomUUID} from 'node:crypto';
 import {
-  isUserAdmin, syncBlacklist, queueRequest, processOfflineQueue, checkAndHandleUser, scanGuild, sleep,
-  parseUserId
+  syncBlacklist, queueRequest, processOfflineQueue, checkAndHandleUser, scanGuild, sleep,
+  parseUserId, scanAllGuilds
 } from './core';
-import { PluginConfig, GuildSettings } from './types';
+import {PluginConfig, GuildSettings} from './types';
 
 export const name = 'blacklist-online';
 export const inject = ['database', 'http'];
@@ -12,12 +12,14 @@ export const inject = ['database', 'http'];
 export const usage = `
 ## 功能说明
 一个强大的、基于数据库的群组黑名单管理插件。
-- **受保护名单**: 配置中的用户无法被拉黑。
-- **分群管理**: 可为每个群独立设置黑名单处理模式。
-- **入群扫描**: 可配置机器人在加入新群组时，自动扫描群内现有成员。
-- **自动拒绝**: 自动拒绝数据库黑名单用户的加群申请。
+
+- **云端同步 & 自动巡航**: 实时同步云端黑名单。**当检测到新增黑名单用户时，会自动触发全局扫描**，及时清理所有群内的潜在威胁。
+- **公开处刑**: 无论是自动扫描还是手动扫描，发现黑名单用户时均会在群内发送包含原因的通告（取决于群模式设置）。
+- **受保护名单**: 配置中的用户（如群主、特定管理员）拥有豁免权，无法被拉黑。
+- **分群管理**: 可为每个群独立设置处理模式（仅通知 / 仅踢出 / 通知并踢出 / 关闭）。
+- **入群检测**: 新成员进群或申请加群时，自动检测并拦截黑名单用户。
 - **手动扫描**: 提供指令手动扫描当前或全部群组。
-- **权限控制**: 所有指令均有权限等级控制。
+- **权限控制**: 严格的指令权限分级管理。
 `;
 
 // --- Schema 定义 ---
@@ -59,11 +61,11 @@ export function apply(ctx: Context, config: PluginConfig) {
   ctx.model.extend('blacklist_users', {
     user_id: 'string',
     reason: 'string',
-    disabled: { type: 'boolean', initial: false },
+    disabled: {type: 'boolean', initial: false},
     operator_id: 'string',
     source_id: 'string',
     updated_at: 'timestamp'
-  }, { primary: 'user_id' });
+  }, {primary: 'user_id'});
   ctx.model.extend('blacklist_request_queue', {
     id: 'string', type: 'string', payload: 'json', createdAt: 'timestamp', retryCount: 'unsigned'
   }, {primary: 'id'});
@@ -87,14 +89,26 @@ export function apply(ctx: Context, config: PluginConfig) {
     }
 
     // 启动时立即同步一次
-    syncBlacklist(ctx, config);
+    const hasUpdates = await syncBlacklist(ctx, config);
     // 启动时处理积压队列
     processOfflineQueue(ctx, config);
+
+    // 如果启动同步有更新，触发全群扫描
+    if (hasUpdates) {
+      scanAllGuilds(ctx, config);
+    }
   });
 
   // 3. 定时任务
-  ctx.setInterval(() => syncBlacklist(ctx, config), 5 * Time.minute); // 每5分同步
-  ctx.setInterval(() => processOfflineQueue(ctx, config), Time.minute); // 每1分处理队列
+  ctx.setInterval(async () => {
+    // 每次定时同步，如果有更新，就触发扫描
+    const hasUpdates = await syncBlacklist(ctx, config);
+    if (hasUpdates) {
+      await scanAllGuilds(ctx, config);
+    }
+  }, 5 * Time.minute); // 每5分同步
+
+  ctx.setInterval(() => processOfflineQueue(ctx, config), Time.minute); // 每分钟同步
 
   // 4. 事件监听
 

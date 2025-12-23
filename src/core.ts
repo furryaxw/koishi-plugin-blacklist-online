@@ -27,7 +27,7 @@ export async function isUserAdmin(session: Session, config: PluginConfig, userId
 }
 
 // --- 2. 同步 ---
-export async function syncBlacklist(ctx: Context, config: PluginConfig) {
+export async function syncBlacklist(ctx: Context, config: PluginConfig): Promise<boolean> {
   try {
     const meta = await ctx.database.get('blacklist_meta', {key: 'sync_revision'});
     const localRevision = meta[0]?.value || '';
@@ -48,10 +48,11 @@ export async function syncBlacklist(ctx: Context, config: PluginConfig) {
     });
 
     const {strategy, newRevision, data} = response;
+    let hasNewEntries = false; // 标记是否有新增
 
     if (strategy === 'up-to-date') {
       logger.debug('✅ 黑名单已是最新');
-      return;
+      return false;
     }
 
     if (strategy === 'full_replace') {
@@ -68,18 +69,29 @@ export async function syncBlacklist(ctx: Context, config: PluginConfig) {
           const batch = data.slice(i, i + batchSize);
           await ctx.database.upsert('blacklist_users', batch);
         }
+        hasNewEntries = true; // 全量更新通常视为有变化，触发一次扫描比较安全
       }
     } else if (strategy === 'incremental') {
       logger.info(`📥 增量同步 -> ${newRevision}`);
-      if (data.upserts?.length) await ctx.database.upsert('blacklist_users', data.upserts);
-      if (data.deletes?.length) await ctx.database.remove('blacklist_users', {user_id: data.deletes});
+
+      if (data.upserts?.length) {
+        await ctx.database.upsert('blacklist_users', data.upserts);
+        hasNewEntries = true; // 有新增或更新，标记为 true
+      }
+
+      // 删除操作不触发扫描
+      if (data.deletes?.length) {
+        await ctx.database.remove('blacklist_users', {user_id: data.deletes});
+      }
     }
 
     await ctx.database.upsert('blacklist_meta', [{key: 'sync_revision', value: newRevision}]);
     logger.info('✅ 同步完成');
+    return hasNewEntries;
 
   } catch (error: any) {
     logger.warn(`❌ 同步失败: ${error.message || error}`);
+    return false;
   }
 }
 
@@ -200,8 +212,13 @@ export async function checkAndHandleUser(ctx: Context, config: PluginConfig, ses
       .replace('{reason}', reason)
       .replace('{guild}', session.guildId);
 
-    // 引用回复
-    await session.send(session.messageId ? h('quote', {id: session.messageId}) + msg : msg);
+    // 发送消息
+    try {
+      // 扫描时 session 是伪造的，没有 messageId，直接 send 即可
+      await session.send(session.messageId ? h('quote', {id: session.messageId}) + msg : msg);
+    } catch (e) {
+      logger.warn(`[群: ${session.guildId}] 发送通知失败: ${e}`);
+    }
   }
 
   // 执行踢出
@@ -217,7 +234,7 @@ export async function checkAndHandleUser(ctx: Context, config: PluginConfig, ses
         if (i < config.retryAttempts - 1) await sleep(config.retryDelay);
         else {
           const failMsg = config.kickFailMessage.replace('{user}', displayName).replace('{reason}', String(e));
-          await session.send(failMsg);
+          try { await session.send(failMsg); } catch {}
         }
       }
     }
@@ -276,7 +293,8 @@ export async function scanGuild(
     const fakeSession = bot.session({
       type: 'message',
       guildId,
-      user: {id: bot.selfId}, // 模拟机器人自己
+      channelId: guildId,
+      user: {id: bot.selfId},
     });
 
     let handled = 0;
@@ -298,4 +316,29 @@ export async function scanGuild(
   } catch (error) {
     return {handled: 0, total: 0, error: String(error)};
   }
+}
+
+export async function scanAllGuilds(ctx: Context, config: PluginConfig) {
+  logger.info('🚀 检测到黑名单更新，触发自动全局扫描...');
+
+  let totalHandled = 0;
+  let processedGuilds = 0;
+
+  for (const bot of ctx.bots) {
+    try {
+      const guilds = await bot.getGuildList();
+      for (const guild of guilds.data) {
+        // 调用现有的单群扫描逻辑
+        const result = await scanGuild(ctx, config, bot, guild.id);
+        if (result.handled > 0) {
+          logger.info(`[自动扫描] 群 ${guild.id}: 处理 ${result.handled} 人`);
+          totalHandled += result.handled;
+        }
+        processedGuilds++;
+      }
+    } catch (e) {
+      logger.warn(`Bot ${bot.selfId} 自动扫描出错: ${e}`);
+    }
+  }
+  logger.info(`✅ 自动扫描完成。扫描群组: ${processedGuilds}, 处理人数: ${totalHandled}`);
 }
