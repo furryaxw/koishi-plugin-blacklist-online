@@ -56,32 +56,51 @@ export async function syncBlacklist(ctx: Context, config: PluginConfig): Promise
     }
 
     if (strategy === 'full_replace') {
-      logger.info(`执行全量同步，条数: ${data.length}`);
+      logger.info(`执行全量同步`);
 
-      // 1. 先清空本地表，确保环境干净
+      // 1. 先清空本地表
       await ctx.database.remove('blacklist_users', {});
+      await ctx.database.remove('blacklist_whitelist', {});
 
-      // 2. 批量写入。由于我们定义了 primary: 'user_id'，这里即便有重复也会直接覆盖
-      if (data.length > 0) {
-        // 分批处理，防止 SQLite 单次 SQL 语句过长
+      // 2. 批量写入
+      // 兼容旧版API返回数组的情况（虽然我们修改了Server，但保持健壮性）
+      const blacklistData = Array.isArray(data) ? data : (data.blacklist || []);
+      const whitelistData = Array.isArray(data) ? [] : (data.whitelist || []);
+
+      if (blacklistData.length > 0) {
         const batchSize = 100;
-        for (let i = 0; i < data.length; i += batchSize) {
-          const batch = data.slice(i, i + batchSize);
-          await ctx.database.upsert('blacklist_users', batch);
+        for (let i = 0; i < blacklistData.length; i += batchSize) {
+          await ctx.database.upsert('blacklist_users', blacklistData.slice(i, i + batchSize));
         }
-        hasNewEntries = true; // 全量更新通常视为有变化，触发一次扫描比较安全
+        hasNewEntries = true;
       }
+
+      if (whitelistData.length > 0) {
+        const batchSize = 100;
+        for (let i = 0; i < whitelistData.length; i += batchSize) {
+          await ctx.database.upsert('blacklist_whitelist', whitelistData.slice(i, i + batchSize));
+        }
+      }
+
     } else if (strategy === 'incremental') {
       logger.info(`📥 增量同步 -> ${newRevision}`);
 
+      // 处理黑名单更新
       if (data.upserts?.length) {
         await ctx.database.upsert('blacklist_users', data.upserts);
-        hasNewEntries = true; // 有新增或更新，标记为 true
+        hasNewEntries = true;
       }
-
-      // 删除操作不触发扫描
       if (data.deletes?.length) {
         await ctx.database.remove('blacklist_users', {user_id: data.deletes});
+      }
+
+      // 处理白名单更新
+      if (data.whitelist_upserts?.length) {
+        await ctx.database.upsert('blacklist_whitelist', data.whitelist_upserts);
+        // 白名单更新不视为黑名单威胁新增，不需要 hasNewEntries = true
+      }
+      if (data.whitelist_deletes?.length) {
+        await ctx.database.remove('blacklist_whitelist', {user_id: data.whitelist_deletes});
       }
     }
 
@@ -176,18 +195,23 @@ export async function checkAndHandleUser(ctx: Context, config: PluginConfig, ses
   const mode = guildSettings[0]?.mode || config.defaultGuildMode;
   if (mode === 'off') return false;
 
-  // 1. 本地白名单 (最高优先级)
+  // 1. 本地配置白名单 (最高优先级)
   const protectedSet = new Set(config.protectedUsers || []);
   if (protectedSet.has(user_id)) return false;
 
-  // 2. 查库
+  // 2. 云端同步白名单 (次高优先级)
+  // 如果用户在云端白名单中，即便 blacklist_users 表有残留（虽然逻辑上不应存在），也应放行
+  const whitelistEntries = await ctx.database.get('blacklist_whitelist', {user_id});
+  if (whitelistEntries.length > 0) return false;
+
+  // 3. 查黑名单库
   const entries = await ctx.database.get('blacklist_users', {user_id, disabled: false});
   if (entries.length === 0) return false;
 
   const entry = entries[0];
   const reason = entry.reason || 'QQ号黑名单';
 
-  // 3. 查管理员
+  // 4. 查管理员
   if (await isUserAdmin(session, config, user_id)) {
     logger.info(`🛡️ 跳过黑名单管理员 ${user_id}`);
     return false;
@@ -276,13 +300,23 @@ export async function scanGuild(
 
     // 2. 获取本地黑名单缓存
     const blacklist = await ctx.database.get('blacklist_users', {disabled: false});
+    const whitelist = await ctx.database.get('blacklist_whitelist', {});
+
     const blacklistSet = new Set(blacklist.map(b => b.user_id));
+    const whitelistSet = new Set(whitelist.map(w => w.user_id));
+    const protectedSet = new Set(config.protectedUsers || []);
 
     // 3. 筛选目标 (内存操作，极快)
     const targets = members.data.filter((m: { user: { id: string; isBot: any; }; }) => {
-      if (!m.user?.id) return false;
+      const uid = m.user?.id;
+      if (!uid) return false;
       if (config.skipBotMembers && m.user.isBot) return false;
-      return blacklistSet.has(m.user.id);
+
+      // 白名单过滤
+      if (protectedSet.has(uid)) return false;
+      if (whitelistSet.has(uid)) return false;
+
+      return blacklistSet.has(uid);
     });
 
     if (targets.length === 0) return {handled: 0, total: 0};

@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-blacklist-online",
   "description": "自用插件",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [

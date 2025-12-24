@@ -34,6 +34,14 @@ export interface BlacklistEntry {
   updated_at: Date;
 }
 
+// 数据库：云端白名单用户 (本地缓存)
+export interface WhitelistEntry {
+  user_id: string;
+  reason?: string;
+  operator_id?: string;
+  created_at: Date;
+}
+
 // 数据库：离线请求队列
 export interface OfflineRequest {
   id: string;          // 请求 UUID
@@ -59,6 +67,7 @@ export interface GuildSettings {
 declare module 'koishi' {
   interface Tables {
     blacklist_users: BlacklistEntry;
+    blacklist_whitelist: WhitelistEntry;
     blacklist_request_queue: OfflineRequest;
     blacklist_meta: MetaEntry;
     blacklist_guild_settings: GuildSettings;

@@ -13,9 +13,9 @@ export const usage = `
 ## 功能说明
 一个强大的、基于数据库的群组黑名单管理插件。
 
-- **云端同步 & 自动巡航**: 实时同步云端黑名单。**当检测到新增黑名单用户时，会自动触发全局扫描**，及时清理所有群内的潜在威胁。
+- **云端同步**: 实时同步云端黑名单。**当检测到新增黑名单用户时，会自动触发全局扫描**，及时清理所有群内的潜在威胁。
+- **双重白名单**: 支持**本地配置白名单**和**云端同步白名单**，受保护用户无法被拉黑。
 - **公开处刑**: 无论是自动扫描还是手动扫描，发现黑名单用户时均会在群内发送包含原因的通告（取决于群模式设置）。
-- **受保护名单**: 配置中的用户（如群主、特定管理员）拥有豁免权，无法被拉黑。
 - **分群管理**: 可为每个群独立设置处理模式（仅通知 / 仅踢出 / 通知并踢出 / 关闭）。
 - **入群检测**: 新成员进群或申请加群时，自动检测并拦截黑名单用户。
 - **手动扫描**: 提供指令手动扫描当前或全部群组。
@@ -28,7 +28,7 @@ export const Config: Schema<PluginConfig> = Schema.intersect([
     remoteApiUrl: Schema.string().required().description('远程黑名单中心 API 地址 (建议 HTTPS)'),
     apiToken: Schema.string().role('secret').required().description('API 访问令牌'),
     adminRoles: Schema.array(String).default(['owner', 'admin']).description('管理员角色名 (不区分大小写)'),
-    protectedUsers: Schema.array(String).role('table').description('本地受保护用户 (白名单)'),
+    protectedUsers: Schema.array(String).role('table').description('本地受保护用户 (本地强制白名单)'),
     defaultGuildMode: Schema.union([
       Schema.const('off').description('关闭'),
       Schema.const('notify').description('仅通知'),
@@ -66,6 +66,14 @@ export function apply(ctx: Context, config: PluginConfig) {
     source_id: 'string',
     updated_at: 'timestamp'
   }, {primary: 'user_id'});
+
+  ctx.model.extend('blacklist_whitelist', {
+    user_id: 'string',
+    reason: 'string',
+    operator_id: 'string',
+    created_at: 'timestamp'
+  }, {primary: 'user_id'});
+
   ctx.model.extend('blacklist_request_queue', {
     id: 'string', type: 'string', payload: 'json', createdAt: 'timestamp', retryCount: 'unsigned'
   }, {primary: 'id'});
@@ -116,8 +124,12 @@ export function apply(ctx: Context, config: PluginConfig) {
   ctx.on('guild-member-request', async (session) => {
     if (!config.enableAutoReject || !session.userId) return;
 
-    // 先查本地白名单
+    // 先查本地配置白名单
     if (config.protectedUsers.includes(session.userId)) return;
+
+    // 再查云端同步白名单
+    const wl = await ctx.database.get('blacklist_whitelist', {user_id: session.userId});
+    if (wl.length > 0) return;
 
     // 查库
     const entries = await ctx.database.get('blacklist_users', {user_id: session.userId, disabled: false});
@@ -153,6 +165,10 @@ export function apply(ctx: Context, config: PluginConfig) {
       const userId = parseUserId(user)
       // 本地白名单前置拦截
       if (config.protectedUsers.includes(userId)) return '❌ 该用户在本地白名单中，无法拉黑。';
+
+      // 云端白名单拦截
+      const wl = await ctx.database.get('blacklist_whitelist', {user_id: userId});
+      if (wl.length > 0) return '❌ 该用户在云端白名单中，无法拉黑。';
 
       const requestId = randomUUID();
       const payload = {
