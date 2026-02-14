@@ -91,9 +91,9 @@ export function apply(ctx: Context, config: PluginConfig) {
     if (entries.length === 0) {
       const uuid = randomUUID();
       await ctx.database.create('blacklist_meta', {key: 'instance_uuid', value: uuid});
-      logger.info(`✨ 初始化实例 UUID: ${uuid}`);
+      logger.info(`✨ 初始化实例 UUID: ${uuid.slice(0, 8) + '...'}`);
     } else {
-      logger.info(`📱 当前实例 UUID: ${entries[0].value}`);
+      logger.info(`📱 当前实例 UUID: ${entries[0].value.slice(0, 8) + '...'}`);
     }
 
     // 启动时立即同步一次
@@ -172,7 +172,7 @@ export function apply(ctx: Context, config: PluginConfig) {
 
       const requestId = randomUUID();
       const payload = {
-        request_id: requestId,
+        id: requestId,
         type: 'ADD',
         applicant_id: session.userId,
         target_user_id: userId,
@@ -202,7 +202,7 @@ export function apply(ctx: Context, config: PluginConfig) {
 
       const requestId = randomUUID();
       const payload = {
-        request_id: requestId,
+        id: requestId,
         type: 'REMOVE',
         applicant_id: session.userId,
         target_user_id: userId,
@@ -227,7 +227,7 @@ export function apply(ctx: Context, config: PluginConfig) {
       if (!uuid) return '请输入要撤回的申请 UUID。';
 
       const payload = {
-        request_id: randomUUID(),
+        id: randomUUID(),
         target_request_id: uuid,
         applicant_id: session?.userId,
         timestamp: Date.now()
