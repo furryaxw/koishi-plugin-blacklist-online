@@ -25,8 +25,8 @@ export const usage = `
 // --- Schema 定义 ---
 export const Config: Schema<PluginConfig> = Schema.intersect([
   Schema.object({
-    remoteApiUrl: Schema.string().required().description('远程黑名单中心 API 地址 (建议 HTTPS)'),
-    apiToken: Schema.string().role('secret').required().description('API 访问令牌'),
+    remoteApiUrl: Schema.string().default('https://www.furryaxw.top/blacklist-api').required().description('远程黑名单中心 API 地址'),
+    apiToken: Schema.string().role('secret').required().description('API 访问令牌 (请前往 https://www.furryaxw.top/Blacklist 申请)'),
     adminRoles: Schema.array(String).default(['owner', 'admin']).description('管理员角色名 (不区分大小写)'),
     protectedUsers: Schema.array(String).role('table').description('本地受保护用户 (本地强制白名单)'),
     defaultGuildMode: Schema.union([
@@ -34,7 +34,7 @@ export const Config: Schema<PluginConfig> = Schema.intersect([
       Schema.const('notify').description('仅通知'),
       Schema.const('kick').description('仅踢出'),
       Schema.const('both').description('通知并踢出'),
-    ]).default('off').description('新群组默认模式'),
+    ]).default('notify').description('新群组默认模式'),
   }).description('核心设置'),
 
   Schema.object({
