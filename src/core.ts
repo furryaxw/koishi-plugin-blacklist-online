@@ -10,19 +10,21 @@ export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, 
 let isProcessingQueue = false;
 
 // --- 1. 权限判断 ---
-export async function isUserAdmin(session: Session, config: PluginConfig, userId: string): Promise<boolean> {
+export async function isUserAdmin(session: Session, userId: string): Promise<boolean> {
     if (!session.guildId) return false;
     try {
-        const member = await session.bot.getGuildMember(session.guildId, userId);
-        if (!member) return false;
+        const memberInfo = await session.bot.getGuildMember(session.guildId, userId);
+        if (!memberInfo) return false;
 
-        // 统一转小写比对
-        const allowedRoles = (config.adminRoles || ['owner', 'admin']).map(r => r.toLowerCase());
-        const userRoles = [...(member.roles || [])].map(r => r.toLowerCase());
+        const adminRoles = ["owner", "admin", "administrator"];
+        const memberRoles = (memberInfo.roles || []).map(r => r.name).filter((n): n is string => !!n);
 
-        return userRoles.some(role => allowedRoles.includes(role));
+        for (const role of memberRoles) {
+            if (adminRoles.includes(role.toLowerCase())) return true;
+        }
+        return false;
     } catch (error) {
-        return false; // 报错视为无权限
+        return true;
     }
 }
 
@@ -258,7 +260,7 @@ export async function checkAndHandleUser(ctx: Context, config: PluginConfig, ses
         return false;
     }
 
-    if (await isUserAdmin(session, config, user_id)) {
+    if (await isUserAdmin(session, user_id)) {
         traceData.bypass_reason = 'admin_bypass';
         finalizeTrace();
         return false;

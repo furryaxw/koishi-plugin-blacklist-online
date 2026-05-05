@@ -33,7 +33,6 @@ export const Config: Schema<PluginConfig> = Schema.intersect([
     Schema.object({
         remoteApiUrl: Schema.string().default('https://www.furryaxw.top/blacklist-api').required().description('远程黑名单中心 API 地址'),
         apiToken: Schema.string().role('secret').required().description('API 访问令牌 (请前往 https://www.furryaxw.top/Blacklist 申请)'),
-        adminRoles: Schema.array(String).default(['owner', 'admin']).description('管理员角色名 (不区分大小写)'),
         protectedUsers: Schema.array(String).role('table').description('本地受保护用户 (本地强制白名单)'),
         defaultGuildMode: Schema.union([
             Schema.const('off').description('关闭'),

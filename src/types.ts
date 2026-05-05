@@ -5,7 +5,6 @@ export interface PluginConfig {
     apiToken: string;
 
     // --- 权限与策略 ---
-    adminRoles: string[]; // 自定义管理员角色
     protectedUsers: string[]; // 本地白名单
     defaultGuildMode: 'off' | 'notify' | 'kick' | 'both';
 
